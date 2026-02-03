@@ -1,441 +1,426 @@
-<template>
-  <q-page class="bg-[#F5F5F7] q-pa-xl font-sans text-[#1D1D1F]">
-    <div class="max-w-7xl mx-auto">
-      
-      <!-- Cabeçalho Principal (Estilo Apple Dashboard) -->
-      <div class="row items-end q-mb-xl">
-        <div class="col">
-          <div class="text-overline text-[#86868B] q-mb-xs tracking-widest font-bold">GESTÃO DE DADOS</div>
-          <h1 class="text-h3 font-bold text-[#1D1D1F] tracking-tight q-ma-none leading-none">
-            {{ tabelaSelecionada }}
-          </h1>
-        </div>
-        
-        <div class="col-auto row q-gutter-sm items-center">
-          <!-- Seletor de Tabela com Estilo Limpo -->
-          <q-select 
-            v-model="tabelaSelecionada" 
-            :options="tabelas"
-            outlined
-            dense
-            rounded
-            bg-color="white"
-            class="apple-select shadow-sm"
-            style="min-width: 240px"
-            @update:model-value="buscarDados"
-          >
-            <template v-slot:prepend>
-              <q-icon name="folder" color="primary" size="20px" />
-            </template>
-          </q-select>
+<script setup>
+import { ref, onMounted, computed, watch } from 'vue'
+import { api } from 'boot/axios'
+import { useQuasar } from 'quasar'
 
-          <!-- Botão de Ação Principal -->
-          <q-btn 
-            unelevated 
-            rounded 
-            color="primary" 
-            icon="add" 
-            label="Novo Registro" 
-            class="q-px-lg apple-btn-main shadow-lg"
-            @click="abrirModalCriar"
-          />
+const $q = useQuasar()
+
+// --- ESTADO GLOBAL ---
+const tab = ref('programas') // Aba ativa
+const loading = ref(false)
+const dialogOpen = ref(false)
+const isEditing = ref(false)
+const filter = ref('')
+const rows = ref([])
+
+// Dados Auxiliares (Para Selects/Lookups)
+const listaCategorias = ref([])
+const listaProgramas = ref([])
+
+// Objeto de formulário dinâmico
+const formData = ref({})
+
+// --- CONFIGURAÇÃO DAS ENTIDADES ---
+const entityConfig = {
+  programas: {
+    title: 'Programas',
+    endpoint: '/programas',
+    pk: 'CD_Programa',
+    columns: [
+      { name: 'CD_Programa', label: 'Código', field: 'CD_Programa', align: 'left', sortable: true },
+      { name: 'DS_Programa', label: 'Descrição', field: 'DS_Programa', align: 'left', sortable: true },
+      { name: 'actions', label: 'Ações', field: 'actions', align: 'center' }
+    ],
+    defaultData: { DS_Programa: '' }
+  },
+  categorias: {
+    title: 'Categorias',
+    endpoint: '/categorias',
+    pk: 'CD_Categoria',
+    columns: [
+      { name: 'CD_Categoria', label: 'Código', field: 'CD_Categoria', align: 'left', sortable: true },
+      { name: 'DS_Categoria', label: 'Descrição', field: 'DS_Categoria', align: 'left', sortable: true },
+      { name: 'actions', label: 'Ações', field: 'actions', align: 'center' }
+    ],
+    defaultData: { DS_Categoria: '' }
+  },
+    empregados: {
+    title: 'Empregados',
+    endpoint: '/empregados',
+    pk: 'NR_Matricula',
+    columns: [
+      { name: 'NR_Matricula', label: 'Matrícula', field: 'NR_Matricula', align: 'left', sortable: true },
+      { name: 'NM_Pessoa', label: 'Nome', field: 'NM_Pessoa', align: 'left', sortable: true },
+      { name: 'CD_Categoria', label: 'Cat.', field: 'CD_Categoria', align: 'left' },
+      { name: 'CD_Pessoa', label: 'Código Pessoa', field: 'CD_Pessoa', align: 'left' },
+      { name: 'actions', label: 'Ações', field: 'actions', align: 'center' }
+    ],
+    defaultData: { NR_Matricula: null, NM_Pessoa: '', CD_Categoria: null, CD_Pessoa: '' }
+  },
+  metas: {
+    title: 'Metas das Categorias',
+    endpoint: '/metas-categorias',
+    pk: 'CD_MetaCategoria',
+    columns: [
+      { name: 'CD_MetaCategoria', label: 'ID', field: 'CD_MetaCategoria', align: 'left' },
+      { name: 'Ano', label: 'Ano', field: 'Ano', align: 'left' },
+      { name: 'CD_Meta', label: 'Meta', field: 'CD_Meta', align: 'left' },
+      { name: 'CD_Categoria', label: 'Cat.', field: 'CD_Categoria', align: 'left' },
+      { name: 'actions', label: 'Ações', field: 'actions', align: 'center' }
+    ],
+    defaultData: { CD_Meta: null, CD_Categoria: null, Ano: new Date().getFullYear(), ValorAbsoluto: 0 }
+  }
+}
+
+const currentConfig = computed(() => entityConfig[tab.value])
+
+// --- MÉTODOS DE API ---
+
+const fetchData = async () => {
+  try {
+    loading.value = true
+    const response = await api.get(currentConfig.value.endpoint)
+    rows.value = response.data
+  } catch (error) {
+    notifyError('Erro ao carregar dados' + error)
+  } finally {
+    loading.value = false
+  }
+}
+
+// Busca dados para os selects (Categorias e Programas)
+const fetchAuxData = async () => {
+  try {
+    const [catRes, progRes] = await Promise.all([
+      api.get('/categorias'),
+      api.get('/programas')
+    ])
+    listaCategorias.value = catRes.data
+    listaProgramas.value = progRes.data
+  } catch (e) { console.error('Erro ao carregar auxiliares'+ e)}
+}
+
+const saveEntry = async () => {
+  try {
+    const config = currentConfig.value
+    if (isEditing.value) {
+      const id = formData.value[config.pk]
+      await api.put(`${config.endpoint}/${id}`, formData.value)
+      notifySuccess('Registro atualizado!')
+    } else {
+      const payload = { ...formData.value }
+      // ADICIONE 'empregados' AQUI:
+      // Isso faz o banco gerar o "numero sozinho" para a matrícula
+      if (['programas', 'categorias'].includes(tab.value)) {
+        delete payload[config.pk]
+      }
+      await api.post(config.endpoint, payload)
+      notifySuccess('Registro criado!')
+    }
+    dialogOpen.value = false
+    fetchData()
+  } catch (error) {
+    notifyError('Erro ao salvar: ' + error)
+  }
+}
+
+const deleteEntry = (id) => {
+  $q.dialog({
+    title: 'Confirmar Exclusão',
+    message: 'Deseja realmente remover este registro?',
+    cancel: true,
+    persistent: true,
+    ok: { color: 'negative', label: 'Excluir', flat: true }
+  }).onOk(async () => {
+    try {
+      await api.delete(`${currentConfig.value.endpoint}/${id}`)
+      notifySuccess('Excluído com sucesso!')
+      fetchData()
+    } catch (error) {
+      notifyError('Erro ao excluir (Pode haver dependências)' + error)
+    }
+  })
+}
+
+// --- UTILITÁRIOS ---
+
+const openForm = (item = null) => {
+  isEditing.value = !!item
+  formData.value = item ? { ...item } : { ...currentConfig.value.defaultData }
+  dialogOpen.value = true
+}
+
+const notifySuccess = (msg) => $q.notify({ type: 'positive', message: msg, position: 'top-right' })
+const notifyError = (msg) => $q.notify({ type: 'negative', message: msg, position: 'top-right' })
+
+// Observar mudança de aba
+watch(tab, () => {
+  filter.value = ''
+  fetchData()
+})
+
+onMounted(() => {
+  fetchData()
+  fetchAuxData()
+})
+</script>
+
+<template>
+  <q-page class="apple-bg q-pa-lg">
+    <div class="max-width-container mx-auto">
+      
+      <!-- Cabeçalho macOS Style -->
+      <div class="row items-center justify-between q-mb-xl">
+        <div>
+          <h1 class="text-h4 text-weight-bolder apple-text q-ma-none">Gestão ADD</h1>
+          <p class="text-subtitle1 text-grey-7 q-mt-xs">Administração completa do banco de dados SARAH</p>
         </div>
+        <q-btn 
+          @click="openForm()"
+          label="Adicionar Novo" 
+          icon="add" 
+          unelevated 
+          class="apple-btn-primary"
+        />
       </div>
 
-      <!-- Container de Dados (Card Estilo macOS) -->
-      <div class="apple-card shadow-xl bg-white/80 rounded-[28px] overflow-hidden border border-[#D2D2D7]/30 backdrop-blur-md">
-        
-        <!-- Toolbar da Tabela -->
-        <div class="q-pa-lg row items-center border-b border-[#F5F5F7]">
-          <q-input 
-            v-model="filtro" 
-            placeholder="Pesquisar registros..." 
-            outlined 
-            dense 
-            rounded
-            bg-color="#F5F5F7"
-            class="col-md-5 col-12 apple-search-bar"
-          >
-            <template v-slot:prepend>
-              <q-icon name="search" size="18px" color="grey-6" />
-            </template>
-          </q-input>
-          
-          <q-space />
-          
-          <q-btn flat round icon="ios_share" color="grey-7" class="q-mr-sm">
-            <q-tooltip>Exportar Relatório</q-tooltip>
-          </q-btn>
-          <q-btn flat round icon="sync" :loading="carregando" color="primary" @click="buscarDados">
-            <q-tooltip>Sincronizar Banco</q-tooltip>
-          </q-btn>
-        </div>
-
-        <!-- Tabela de Dados Refinada -->
-        <q-table
-          :rows="registros"
-          :columns="colunasFormatadas"
-          :loading="carregando"
-          :filter="filtro"
-          flat
-          row-key="id"
-          class="apple-table-style"
-          :pagination="{ rowsPerPage: 10 }"
+      <!-- Sistema de Abas Apple -->
+      <div class="apple-card q-mb-lg">
+        <q-tabs
+          v-model="tab"
+          dense
+          class="text-grey"
+          active-color="primary"
+          indicator-color="primary"
+          align="left"
+          narrow-indicator
         >
-          <!-- Cabeçalho Customizado -->
-          <template v-slot:header="props">
-            <q-tr :props="props" class="bg-[#F5F5F7]/40 text-[#86868B]">
-              <q-th v-for="col in props.cols" :key="col.name" :props="props" class="font-bold text-[11px] tracking-widest uppercase">
-                {{ col.label }}
-              </q-th>
-            </q-tr>
+          <q-tab name="programas" label="Programas" />
+          <q-tab name="categorias" label="Categorias" />
+          <q-tab name="empregados" label="Empregados" />
+          <q-tab name="metas" label="Metas" />
+        </q-tabs>
+      </div>
+
+      <!-- Tabela Principal -->
+      <div class="apple-card shadow-apple overflow-hidden">
+        <q-table
+          :rows="rows"
+          :columns="currentConfig.columns"
+          :loading="loading"
+          :filter="filter"
+          row-key="pk"
+          flat
+          class="apple-table"
+        >
+          <!-- Barra de Busca -->
+          <template v-slot:top-right>
+            <q-input 
+              v-model="filter" 
+              placeholder="Buscar..." 
+              borderless 
+              dense 
+              class="apple-search-bar"
+            >
+              <template v-slot:append>
+                <q-icon name="search" size="xs" />
+              </template>
+            </q-input>
           </template>
 
-          <!-- Células de Ação -->
-          <template v-slot:body-cell-acoes="props">
-            <q-td :props="props" class="text-right">
-              <div class="row justify-end q-gutter-xs">
-                <q-btn 
-                  flat 
-                  round 
-                  color="blue-7" 
-                  icon="edit" 
-                  size="sm" 
-                  class="action-btn"
-                  @click="editarItem(props.row)"
-                />
-                <q-btn 
-                  flat 
-                  round 
-                  color="red-7" 
-                  icon="delete_outline" 
-                  size="sm" 
-                  class="action-btn"
-                  @click="deletarItem(props.row[pkAtual])"
-                />
-              </div>
+          <!-- Slot de Ações -->
+          <template v-slot:body-cell-actions="props">
+            <q-td :props="props" class="text-center">
+              <q-btn 
+                flat round size="sm" 
+                icon="edit" 
+                color="blue-7" 
+                @click="openForm(props.row)"
+                class="q-mr-xs"
+              />
+              <q-btn 
+                flat round size="sm" 
+                icon="delete" 
+                color="red-5" 
+                @click="deleteEntry(props.row[currentConfig.pk])"
+              />
             </q-td>
           </template>
 
-          <!-- Estado de Carregamento -->
-          <template v-slot:loading>
-            <q-inner-loading showing color="primary" />
-          </template>
-
-          <!-- Estado Sem Dados -->
-          <template v-slot:no-data>
-            <div class="full-width row flex-center q-pa-xl text-[#86868B] q-gutter-md">
-              <q-icon size="3em" name="auto_awesome" color="grey-4" />
-              <div class="text-center">
-                <div class="text-weight-bold">Base de dados limpa.</div>
-                <div class="text-caption">Nenhum registro encontrado em {{ tabelaSelecionada }}.</div>
-              </div>
-            </div>
+          <!-- Customização de colunas específicas (ex: Matrícula) -->
+          <template v-slot:body-cell-NR_Matricula="props">
+            <q-td :props="props">
+              <span class="text-weight-bold text-blue-9">#{{ props.value }}</span>
+            </q-td>
           </template>
         </q-table>
       </div>
     </div>
 
-    <!-- Modal de Edição (Estilo Apple Sheet) -->
-    <q-dialog v-model="exibirModal" backdrop-filter="blur(20px) brightness(0.9)">
-      <q-card class="apple-modal-card rounded-[32px] q-pa-xl shadow-2xl overflow-hidden" style="width: 550px; max-width: 95vw;">
-        
-        <q-card-section class="row items-center q-pb-xl q-pt-none">
-          <div>
-            <div class="text-h4 font-bold text-[#1D1D1F] tracking-tight">
-              {{ editando ? 'Editar Registro' : 'Novo Registro' }}
-            </div>
-            <div class="text-subtitle2 text-[#86868B]">Preencha os dados da tabela {{ tabelaSelecionada }}</div>
+    <!-- Modal de Formulário (Dialog) -->
+    <q-dialog v-model="dialogOpen" persistent>
+      <q-card class="apple-dialog-card">
+        <q-card-section class="row items-center q-pb-none">
+          <div class="text-h6 text-weight-bold apple-text">
+            {{ isEditing ? 'Editar' : 'Novo' }} {{ currentConfig.title }}
           </div>
           <q-space />
-          <q-btn icon="close" flat round dense v-close-popup color="grey-5" />
+          <q-btn icon="close" flat round dense v-close-popup />
         </q-card-section>
 
-        <q-card-section class="q-pa-none">
-          <q-form @submit="salvar" class="q-gutter-y-lg">
+        <q-card-section class="q-pt-lg">
+          <div class="column q-gutter-md">
             
-            <div class="row q-col-gutter-lg">
-              <div v-for="coluna in colunasForm" :key="coluna" class="col-12">
-                <div class="row items-center q-mb-xs">
-                  <span class="text-[13px] font-bold text-[#1D1D1F] q-ml-sm uppercase tracking-wide">{{ coluna }}</span>
-                  <q-icon v-if="coluna === pkAtual" name="lock" size="14px" color="grey-4" class="q-ml-xs" />
-                </div>
-                <q-input 
-                  v-model="form[coluna]"
-                  outlined
-                  dense
-                  rounded
-                  bg-color="#F5F5F7"
-                  :placeholder="'Digitar ' + coluna + '...'"
-                  :disabled="coluna === pkAtual"
-                  class="apple-input-field"
-                  :rules="[val => (val !== null && val !== '') || 'Obrigatório']"
-                  hide-bottom-space
-                />
-              </div>
-            </div>
+            <!-- FORMULÁRIO DINÂMICO BASEADO NA ABA -->
 
-            <!-- Rodapé do Modal com Botões -->
-            <div class="row justify-end q-gutter-md q-mt-xl">
-              <q-btn 
-                label="Cancelar" 
-                flat 
-                rounded 
-                color="grey-9" 
-                v-close-popup 
-                class="q-px-lg text-bold"
+            <!-- Campos para Programas / Categorias -->
+            <template v-if="tab === 'programas'">
+              <q-input v-model="formData.DS_Programa" label="Descrição do Programa" filled class="apple-input" />
+            </template>
+
+            <template v-if="tab === 'categorias'">
+              <q-input v-model="formData.DS_Categoria" label="Descrição da Categoria" filled class="apple-input" />
+            </template>
+
+            <!-- Campos para Empregados -->
+            <template v-if="tab === 'empregados'">
+            <q-input 
+              v-model.number="formData.NR_Matricula" 
+              label="Número de Matrícula" 
+              filled 
+              type="number" 
+              :disable="isEditing" 
+              class="apple-input"
+            />
+            
+            <q-input v-model="formData.CD_Pessoa" label="Código da Pessoa" filled class="apple-input" />
+            
+            <q-input v-model="formData.NM_Pessoa" label="Nome Completo" filled class="apple-input" />
+            
+            <q-select
+              v-model="formData.CD_Categoria"
+              :options="listaCategorias"
+              option-label="DS_Categoria"
+              option-value="CD_Categoria"
+              emit-value
+              map-options
+              label="Categoria do Colaborador"
+              filled
+              class="apple-input"
+            />
+          </template>
+
+            <!-- Campos para Metas -->
+            <template v-if="tab === 'metas'">
+              <q-input v-model.number="formData.Ano" label="Ano Fiscal" filled type="number" class="apple-input" />
+              <q-select
+                v-model="formData.CD_Meta"
+                :options="listaProgramas"
+                option-label="DS_Programa"
+                option-value="CD_Programa"
+                emit-value
+                map-options
+                label="Programa (Meta)"
+                filled
+                class="apple-input"
               />
-              <q-btn 
-                :label="editando ? 'Salvar Alterações' : 'Criar Registro'" 
-                color="primary" 
-                unelevated 
-                rounded 
-                type="submit" 
-                class="q-px-xl text-bold apple-btn-main shadow-md"
+              <q-select
+                v-model="formData.CD_Categoria"
+                :options="listaCategorias"
+                option-label="DS_Categoria"
+                option-value="CD_Categoria"
+                emit-value
+                map-options
+                label="Categoria Vinculada"
+                filled
+                class="apple-input"
               />
-            </div>
-          </q-form>
+              <q-input v-model.number="formData.ValorAbsoluto" label="Valor Absoluto" filled type="number" class="apple-input" />
+            </template>
+
+          </div>
         </q-card-section>
+
+        <q-card-actions align="right" class="q-pa-md">
+          <q-btn flat label="Cancelar" color="grey-7" v-close-popup />
+          <q-btn 
+            label="Salvar Alterações" 
+            color="primary" 
+            unelevated 
+            class="apple-btn-primary q-px-lg"
+            @click="saveEntry"
+          />
+        </q-card-actions>
       </q-card>
     </q-dialog>
+
   </q-page>
 </template>
 
-<script setup>
-import { ref, onMounted, computed } from 'vue';
-import axios from 'axios';
-import { useQuasar } from 'quasar';
-
-const $q = useQuasar();
-const API_URL = 'http://localhost:3000/api';
-
-// Configuração de PKs por tabela
-const configTabelas = {
-  'Categorias': 'CD_Categoria',
-  'Empregados': 'CD_Empregado',
-  'Programas': 'CD_Programa',
-  'Metas': 'CD_Meta',
-  'EmpregadosProgramas': 'CD_EmpregadoPrograma',
-  'MetasCategorias': 'CD_MetaCategoria',
-  'MetasEmpregados': 'CD_MetaEmpregado',
-  'MetasProgramas': 'CD_MetaPrograma',
-  'ResultadosMetasCategorias': 'CD_ResultadoCat',
-  'ResultadosMetasEmpregados': 'CD_ResultadoEmp',
-  'ResultadosMetasProgramas': 'CD_ResultadoProg'
-};
-
-// Estrutura de colunas para quando o banco está zerado (Fallback UX)
-const colunasPadrao = {
-  'Categorias': ['CD_Categoria', 'Nome', 'Descricao'],
-  'Empregados': ['CD_Empregado', 'Nome', 'Cargo', 'Salario', 'DataAdmissao'],
-  'Programas': ['CD_Programa', 'Nome', 'Descricao', 'DataInicio', 'DataFim'],
-  'Metas': ['CD_Meta', 'Descricao', 'ValorAlvo', 'Prazo'],
-  'EmpregadosProgramas': ['CD_EmpregadoPrograma', 'CD_Empregado', 'CD_Programa'],
-  'MetasCategorias': ['CD_MetaCategoria', 'CD_Meta', 'CD_Categoria'],
-  'MetasEmpregados': ['CD_MetaEmpregado', 'CD_Meta', 'CD_Empregado', 'ValorAlcancado'],
-  'MetasProgramas': ['CD_MetaPrograma', 'CD_Meta', 'CD_Programa'],
-  'ResultadosMetasCategorias': ['CD_ResultadoCat', 'CD_MetaCategoria', 'Valor', 'DataReferencia'],
-  'ResultadosMetasEmpregados': ['CD_ResultadoEmp', 'CD_MetaEmpregado', 'Valor', 'DataReferencia'],
-  'ResultadosMetasProgramas': ['CD_ResultadoProg', 'CD_MetaPrograma', 'Valor', 'DataReferencia']
-};
-
-const tabelas = Object.keys(configTabelas);
-const tabelaSelecionada = ref(tabelas[1]); // Padrão: Empregados
-const registros = ref([]);
-const carregando = ref(false);
-const filtro = ref('');
-const exibirModal = ref(false);
-const editando = ref(false);
-const form = ref({});
-
-const pkAtual = computed(() => configTabelas[tabelaSelecionada.value]);
-
-// Formatação inteligente das colunas da tabela
-const colunasFormatadas = computed(() => {
-  const colsSource = registros.value.length > 0 
-    ? Object.keys(registros.value[0]) 
-    : colunasPadrao[tabelaSelecionada.value];
-
-  if (!colsSource) return [];
-
-  const cols = colsSource.map(k => ({
-    name: k, 
-    label: k, 
-    field: k, 
-    align: 'left', 
-    sortable: true,
-    classes: k === pkAtual.value ? 'text-weight-bolder text-primary' : 'text-[#424245]'
-  }));
-  cols.push({ name: 'acoes', label: '', align: 'right' });
-  return cols;
-});
-
-// Definição dos campos que aparecem no formulário
-const colunasForm = computed(() => {
-  const colsSource = registros.value.length > 0 
-    ? Object.keys(registros.value[0]) 
-    : colunasPadrao[tabelaSelecionada.value];
-
-  if (!colsSource) return [];
-  
-  // Em criação (POST), removemos a PK pois o banco gera (IDENTITY)
-  return editando.value ? colsSource : colsSource.filter(c => c !== pkAtual.value);
-});
-
-// Requisição de busca de dados
-const buscarDados = async () => {
-  carregando.value = true;
-  try {
-    const res = await axios.get(`${API_URL}/GET/${tabelaSelecionada.value}`);
-    registros.value = Array.isArray(res.data) ? res.data : [res.data];
-  } catch (err) {
-    registros.value = [];
-    if (err.response?.status !== 404) {
-      $q.notify({ 
-        icon: 'error', 
-        color: 'negative', 
-        message: err, 
-        position: 'top-right' 
-      });
-    }
-  } finally {
-    carregando.value = false;
-  }
-};
-
-const abrirModalCriar = () => {
-  editando.value = false;
-  form.value = {};
-  colunasForm.value.forEach(col => form.value[col] = '');
-  exibirModal.value = true;
-};
-
-const editarItem = (item) => {
-  editando.value = true;
-  form.value = { ...item };
-  exibirModal.value = true;
-};
-
-const salvar = async () => {
-  try {
-    const acao = editando.value ? 'PUT' : 'POST';
-    const id = editando.value ? `/${form.value[pkAtual.value]}` : '';
-    await axios.post(`${API_URL}/${acao}/${tabelaSelecionada.value}${id}`, form.value);
-    
-    $q.notify({ 
-      icon: 'verified', 
-      color: 'positive', 
-      message: `${editando.value ? 'Registro atualizado' : 'Novo registro criado'} com sucesso!`, 
-      position: 'top-right',
-      classes: 'apple-notif'
-    });
-    
-    exibirModal.value = false;
-    buscarDados();
-  } catch (err) {
-    $q.notify({ type: 'negative', message: err});
-  }
-};
-
-const deletarItem = (id) => {
-  $q.dialog({
-    title: 'Confirmar Remoção',
-    message: 'Este registro será apagado permanentemente. Deseja prosseguir?',
-    ok: { label: 'Eliminar', color: 'red-7', rounded: true, unelevated: true, class: 'q-px-lg' },
-    cancel: { label: 'Manter', flat: true, color: 'grey-9', class: 'q-px-lg' },
-    class: 'apple-confirm-dialog rounded-[28px]'
-  }).onOk(async () => {
-    try {
-      await axios.post(`${API_URL}/DELETE/${tabelaSelecionada.value}/${id}`);
-      $q.notify({ icon: 'delete_sweep', color: 'dark', message: 'Registro removido da base.' });
-      buscarDados();
-    } catch (err) {
-      $q.notify({ type: 'negative', message: err });
-    }
-  });
-};
-
-onMounted(buscarDados);
-</script>
-
-<style>
-/* --- Linguagem Visual Apple --- */
-
-.font-sans {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
+<style lang="scss">
+.apple-bg {
+  background-color: #F5F5F7;
+  min-height: 100vh;
 }
 
-/* Botões Apple */
-.apple-btn-main {
-  background: #007AFF !important;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-.apple-btn-main:hover {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
+.max-width-container {
+  max-width: 1100px;
 }
 
-/* Campos de Input e Select */
-.apple-select .q-field__control,
-.apple-search-bar .q-field__control,
-.apple-input-field .q-field__control {
-  border: none !important;
-  transition: background 0.3s ease;
-}
-.apple-input-field .q-field__control:focus-within {
-  background: #E8E8ED !important;
+.apple-text {
+  color: #1D1D1F;
+  letter-spacing: -0.5px;
 }
 
-/* Estilo da Tabela macOS */
-.apple-table-style .q-table__card {
-  background: transparent !important;
-}
-.apple-table-style th {
-  padding: 18px 16px !important;
-  border-bottom: 1px solid #F5F5F7 !important;
-}
-.apple-table-style td {
-  padding: 18px 16px !important;
-  border-bottom: 1px solid #F5F5F7 !important;
-  font-size: 14px;
-}
-.apple-table-style tr:hover {
-  background: rgba(0, 122, 255, 0.04) !important;
+/* Card macOS */
+.apple-card {
+  background: white;
+  border-radius: 18px;
+  border: 1px solid rgba(0,0,0,0.05);
 }
 
-/* Botões de Ação na Tabela */
-.action-btn {
-  transition: all 0.2s ease;
-  background: transparent;
-}
-.action-btn:hover {
-  background: rgba(0, 0, 0, 0.04);
+.shadow-apple {
+  box-shadow: 0 4px 24px rgba(0,0,0,0.04);
 }
 
-/* Modais e Efeitos Blur */
-.apple-modal-card {
-  background: rgba(255, 255, 255, 0.92) !important;
-  border: 1px solid rgba(255, 255, 255, 0.4);
+/* Botão Primário Apple */
+.apple-btn-primary {
+  background: #0071E3 !important;
+  color: white;
+  border-radius: 12px;
+  text-transform: none;
+  font-weight: 600;
+  padding: 8px 20px;
 }
 
-.apple-notif {
-  border-radius: 18px !important;
-  backdrop-filter: blur(10px);
-  box-shadow: 0 12px 40px rgba(0,0,0,0.12) !important;
+/* Tabela Apple */
+.apple-table {
+  .q-table__top { border-bottom: 1px solid #F5F5F7; }
+  th { font-weight: 700; color: #86868B; text-transform: uppercase; font-size: 11px; }
+  td { color: #1D1D1F; padding: 16px; }
 }
 
-/* Scrollbar Customizada */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #D2D2D7;
+.apple-search-bar {
+  background: #F5F5F7;
   border-radius: 10px;
+  padding: 0 12px;
+  width: 250px;
 }
+
+/* Dialog & Inputs */
+.apple-dialog-card {
+  border-radius: 24px;
+  width: 100%;
+  max-width: 500px;
+}
+
+.apple-input {
+  .q-field__control {
+    border-radius: 12px !important;
+    background: #F5F5F7 !important;
+    &:before { border: none !important; }
+  }
+}
+
+.mx-auto { margin-left: auto; margin-right: auto; }
 </style>
